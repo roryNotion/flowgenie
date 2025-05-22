@@ -240,49 +240,88 @@ export class WorkflowEngine {
   }
 
   private async sendEmail(node: any, integration: any): Promise<Record<string, any>> {
-    const to = this.replaceVariables(node.data.config.toEmail);
-    const subject = this.replaceVariables(node.data.config.subject);
-    const body = this.replaceVariables(node.data.config.body);
+    try {
+      // Get email credentials
+      const emailKey = integration.integration_keys.find((k: any) => 
+        k.key_name === 'apiKey' || k.key_name === 'sendgridKey' || k.key_name === 'resendKey'
+      );
 
-    if (integration.type === 'sendgrid') {
-      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${integration.integration_keys[0].encrypted_value}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: to }] }],
-          from: { email: integration.config.fromEmail },
-          subject,
-          content: [{ type: 'text/plain', value: body }],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to send email via SendGrid');
+      if (!emailKey) {
+        throw new Error('Email API key not found');
       }
-    } else if (integration.type === 'resend') {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${integration.integration_keys[0].encrypted_value}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: integration.config.fromEmail,
-          to,
-          subject,
-          text: body,
-        }),
-      });
 
-      if (!response.ok) {
-        throw new Error('Failed to send email via Resend');
+      // Replace variables in email content
+      const to = this.replaceVariables(node.data.config.toEmail);
+      const subject = this.replaceVariables(node.data.config.subject);
+      const body = this.replaceVariables(node.data.config.body);
+
+      // Validate email parameters
+      if (!to || !subject || !body) {
+        throw new Error('Missing required email parameters');
       }
+
+      if (integration.type === 'sendgrid') {
+        console.log('Sending email via SendGrid:', { to, fromEmail: integration.config.fromEmail });
+        
+        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${emailKey.encrypted_value}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            personalizations: [{ 
+              to: [{ email: to }] 
+            }],
+            from: { 
+              email: integration.config.fromEmail,
+              name: integration.config.fromName
+            },
+            subject,
+            content: [{ 
+              type: 'text/plain', 
+              value: body 
+            }],
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(`SendGrid error: ${error.message || 'Failed to send email'}`);
+        }
+      } else if (integration.type === 'resend') {
+        console.log('Sending email via Resend:', { to, fromEmail: integration.config.fromEmail });
+        
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${emailKey.encrypted_value}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: integration.config.fromEmail,
+            to,
+            subject,
+            text: body,
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(`Resend error: ${error.message || 'Failed to send email'}`);
+        }
+      }
+
+      return { 
+        emailSent: true, 
+        to, 
+        subject,
+        provider: integration.type
+      };
+    } catch (error) {
+      console.error('Email sending error:', error);
+      throw new Error(`Failed to send email: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    return { emailSent: true, to, subject };
   }
 
   private async updateDatabase(node: any, integration: any): Promise<Record<string, any>> {
